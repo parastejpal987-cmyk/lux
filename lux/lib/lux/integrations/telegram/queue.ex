@@ -82,8 +82,12 @@ defmodule Lux.Integrations.Telegram.Queue do
           retry_ms =
             case retry_after_sec do
               val when is_integer(val) -> val * 1000
-              val when is_binary(val) -> String.to_integer(val) * 1000
-              _ -> 1000
+              val when is_binary(val) ->
+                case Regex.run(~r/\d+/, val) do
+                  [num] -> String.to_integer(num) * 1000
+                  nil -> 30_000
+                end
+              _ -> 30_000
             end
 
           Logger.warning("Telegram API Rate Limited. Retrying after #{retry_ms} ms.")

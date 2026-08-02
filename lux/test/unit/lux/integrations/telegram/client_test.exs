@@ -185,7 +185,36 @@ defmodule Lux.Integrations.Telegram.ClientTest do
       end
     end
 
-    test "handles 429 rate limiting with retry_after" do
+    test "handles 429 rate limiting with eventual success" do
+      api_key = @mock_api_key
+
+      with_mock Lux.Config, [:passthrough], [telegram_bot_token: fn -> api_key end] do
+        {:ok, agent} = Agent.start_link(fn -> 0 end)
+        
+        Req.Test.expect(TelegramClientMock, fn conn ->
+          calls = Agent.get_and_update(agent, fn state -> {state, state + 1} end)
+          if calls == 0 do
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(429, Jason.encode!(%{
+              "ok" => false,
+              "error_code" => 429,
+              "description" => "Too Many Requests: retry after 0",
+              "parameters" => %{"retry_after" => 0}
+            }))
+          else
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(200, Jason.encode!(%{"ok" => true}))
+          end
+        end)
+
+        assert {:ok, %{"ok" => true}} = Client.request(:post, "/sendMessage")
+        Agent.stop(agent)
+      end
+    end
+
+    test "handles 429 rate limiting with max retries exceeded terminal error" do
       api_key = @mock_api_key
 
       with_mock Lux.Config, [:passthrough], [telegram_bot_token: fn -> api_key end] do
@@ -195,13 +224,11 @@ defmodule Lux.Integrations.Telegram.ClientTest do
           |> Plug.Conn.send_resp(429, Jason.encode!(%{
             "ok" => false,
             "error_code" => 429,
-            "description" => "Too Many Requests: retry after 43",
-            "parameters" => %{"retry_after" => 43}
+            "description" => "Too Many Requests: retry after 0"
           }))
         end)
 
-        {:error, {:rate_limited, 43}} =
-          Client.request(:post, "/sendMessage")
+        assert {:error, :rate_limit_exceeded} = Client.request(:post, "/sendMessage")
       end
     end
 
@@ -213,17 +240,10 @@ defmodule Lux.Integrations.Telegram.ClientTest do
           raise RuntimeError, "Connection failed to https://api.telegram.org/bot#{api_key}/sendMessage"
         end)
 
-        # Req catches the exception and wraps it, our custom step rewrites it.
-        # But wait, in Req.Test, an exception in the mock will crash the test process if not caught by Req.
-        # Actually, let's just make it return an error tuple to test the redaction logic directly if possible.
-        # It's easier to verify that if the token is present in the error string, it gets redacted.
-        try do
-          Client.request(:post, "/sendMessage")
-        rescue
-          e in RuntimeError ->
-            assert Exception.message(e) =~ "***"
-            refute Exception.message(e) =~ api_key
-        end
+        assert {:error, exception} = Client.request(:post, "/sendMessage")
+        msg = Exception.message(exception)
+        assert msg =~ "***"
+        refute msg =~ api_key
       end
     end
   end
