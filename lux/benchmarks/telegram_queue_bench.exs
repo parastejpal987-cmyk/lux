@@ -1,9 +1,7 @@
-Mix.install([
-  {:benchee, "~> 1.0"}
-])
-
-# Assuming Lux is compiled or available in path when this is run
-# This benchmark requires the Lux application to be started.
+# Run this benchmark from the lux root directory using:
+#   mix run benchmarks/telegram_queue_bench.exs
+#
+# Note: This benchmark requires the Lux application to be started.
 
 Lux.Integrations.Telegram.Queue.start_link([])
 

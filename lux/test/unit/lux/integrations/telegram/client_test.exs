@@ -189,28 +189,26 @@ defmodule Lux.Integrations.Telegram.ClientTest do
       api_key = @mock_api_key
 
       with_mock Lux.Config, [:passthrough], [telegram_bot_token: fn -> api_key end] do
-        {:ok, agent} = Agent.start_link(fn -> 0 end)
-        
+        # First request returns 429
         Req.Test.expect(TelegramClientMock, fn conn ->
-          calls = Agent.get_and_update(agent, fn state -> {state, state + 1} end)
-          if calls == 0 do
-            conn
-            |> Plug.Conn.put_resp_content_type("application/json")
-            |> Plug.Conn.send_resp(429, Jason.encode!(%{
-              "ok" => false,
-              "error_code" => 429,
-              "description" => "Too Many Requests: retry after 0",
-              "parameters" => %{"retry_after" => 0}
-            }))
-          else
-            conn
-            |> Plug.Conn.put_resp_content_type("application/json")
-            |> Plug.Conn.send_resp(200, Jason.encode!(%{"ok" => true}))
-          end
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(429, Jason.encode!(%{
+            "ok" => false,
+            "error_code" => 429,
+            "description" => "Too Many Requests: retry after 0",
+            "parameters" => %{"retry_after" => 0}
+          }))
+        end)
+
+        # Second request (retry) returns 200
+        Req.Test.expect(TelegramClientMock, fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, Jason.encode!(%{"ok" => true}))
         end)
 
         assert {:ok, %{"ok" => true}} = Client.request(:post, "/sendMessage")
-        Agent.stop(agent)
       end
     end
 
@@ -218,15 +216,18 @@ defmodule Lux.Integrations.Telegram.ClientTest do
       api_key = @mock_api_key
 
       with_mock Lux.Config, [:passthrough], [telegram_bot_token: fn -> api_key end] do
-        Req.Test.expect(TelegramClientMock, fn conn ->
-          conn
-          |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(429, Jason.encode!(%{
-            "ok" => false,
-            "error_code" => 429,
-            "description" => "Too Many Requests: retry after 0"
-          }))
-        end)
+        # 1 initial request + 3 retries = 4 requests
+        for _ <- 1..4 do
+          Req.Test.expect(TelegramClientMock, fn conn ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(429, Jason.encode!(%{
+              "ok" => false,
+              "error_code" => 429,
+              "description" => "Too Many Requests: retry after 0"
+            }))
+          end)
+        end
 
         assert {:error, :rate_limit_exceeded} = Client.request(:post, "/sendMessage")
       end

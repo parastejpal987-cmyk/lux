@@ -81,14 +81,17 @@ defmodule Lux.Integrations.Telegram.Queue do
         if retries < @max_retries do
           retry_ms =
             case retry_after_sec do
-              val when is_integer(val) -> val * 1000
+              val when is_integer(val) and val >= 0 -> val * 1000
               val when is_binary(val) ->
-                case Regex.run(~r/\d+/, val) do
-                  [num] -> String.to_integer(num) * 1000
+                case Regex.run(~r/retry after (\d+)/i, val) do
+                  [_, num] -> String.to_integer(num) * 1000
                   nil -> 30_000
                 end
               _ -> 30_000
             end
+
+          # Clamp delay between 1 second and 60 seconds to prevent global queue stalls
+          retry_ms = min(max(retry_ms, 1000), 60_000)
 
           Logger.warning("Telegram API Rate Limited. Retrying after #{retry_ms} ms.")
           
